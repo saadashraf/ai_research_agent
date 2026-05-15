@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Iterator, Optional
 import anthropic
 
 import config
@@ -53,6 +53,31 @@ class AnthropicProvider(ModelProvider):
             model=response.model,
             stop_reason=response.stop_reason,
         )
+
+    def stream_complete(
+        self,
+        messages: list[Message],
+        system: Optional[str] = None,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+    ) -> Iterator[str]:
+        anthropic_messages = [
+            {"role": m.role, "content": m.content}
+            for m in messages
+        ]
+
+        kwargs = dict(
+            model=self._model,
+            max_tokens=max_tokens or config.MAX_TOKENS,
+            temperature=temperature or config.TEMPERATURE,
+            messages=anthropic_messages,
+        )
+        if system:
+            kwargs["system"] = system
+
+        with self._client.messages.stream(**kwargs) as stream:
+            for text in stream.text_stream:
+                yield text
 
     def count_tokens(self, text: str) -> int:
         # Anthropic SDK has a built-in token counter
