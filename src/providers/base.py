@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Optional
+from typing import Iterator, Optional
 
 
 @dataclass
@@ -42,6 +42,21 @@ class ModelProvider(ABC):
         """
         Send messages and return the model's reply.
         This is the core method.
+        """
+        ...
+
+    @abstractmethod
+    def stream_complete(
+        self,
+        messages: list[Message],
+        system: Optional[str] = None,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+    ) -> Iterator[str]:
+        """
+        Send messages and yield text chunks as they arrive from the model.
+        Each yielded value is a raw string delta (may be a single token or
+        a few characters depending on the provider).
         """
         ...
 
