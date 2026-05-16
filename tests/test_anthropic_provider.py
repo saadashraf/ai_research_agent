@@ -24,7 +24,7 @@ def _sdk_response(text="Hello!", input_tokens=10, output_tokens=5,
                   model="claude-test-model", stop_reason="end_turn"):
     """Minimal fake SDK response object matching the fields we read."""
     resp = MagicMock()
-    resp.content = [MagicMock(text=text)]
+    resp.content = [MagicMock(type="text", text=text)]
     resp.usage.input_tokens = input_tokens
     resp.usage.output_tokens = output_tokens
     resp.model = model
@@ -50,10 +50,10 @@ class TestComplete:
         result = provider.complete([Message(role="user", content="Hello")])
         assert isinstance(result, CompletionResponse)
 
-    def test_reply_text_mapped_correctly(self, provider):
+    def test_text_mapped_correctly(self, provider):
         provider._client.messages.create.return_value = _sdk_response(text="Pong")
         result = provider.complete([Message(role="user", content="Ping")])
-        assert result.reply_text == "Pong"
+        assert result.text == "Pong"
 
     def test_token_counts_mapped(self, provider):
         provider._client.messages.create.return_value = _sdk_response(
@@ -119,6 +119,185 @@ class TestComplete:
         provider.complete([Message(role="user", content="x")])
         call_kwargs = provider._client.messages.create.call_args.kwargs
         assert call_kwargs["model"] == "claude-test-model"
+
+
+# ---------------------------------------------------------------------------
+# complete() — tool support
+# ---------------------------------------------------------------------------
+
+from src.providers.base import Tool, ToolCall, ToolParameter
+
+
+def _tool_use_response(tool_id="toolu_1", tool_name="calculator",
+                      tool_input=None, model="claude-test-model"):
+    """Fake SDK response containing a tool_use block."""
+    resp = MagicMock()
+    block = MagicMock(type="tool_use")
+    block.id = tool_id
+    block.name = tool_name
+    block.input = tool_input or {"operation": "add", "a": 1, "b": 2}
+    resp.content = [block]
+    resp.usage.input_tokens = 5
+    resp.usage.output_tokens = 5
+    resp.model = model
+    resp.stop_reason = "tool_use"
+    return resp
+
+
+CALC_TOOL = Tool(
+    name="calculator",
+    description="basic arithmetic",
+    parameters=[
+        ToolParameter(name="op", type="string", description="op name"),
+        ToolParameter(name="a", type="number", description="first",
+                      required=True),
+        ToolParameter(name="b", type="number", description="second",
+                      required=False),
+    ],
+)
+
+
+class TestCompleteToolSchema:
+    """Coverage for the `if tools:` branch that builds the tools kwarg."""
+
+    def test_tools_kwarg_omitted_when_no_tools_passed(self, provider):
+        provider._client.messages.create.return_value = _sdk_response()
+        provider.complete([Message(role="user", content="x")])
+        call_kwargs = provider._client.messages.create.call_args.kwargs
+        assert "tools" not in call_kwargs
+
+    def test_tools_kwarg_included_when_tools_passed(self, provider):
+        provider._client.messages.create.return_value = _sdk_response()
+        provider.complete([Message(role="user", content="x")], tools=[CALC_TOOL])
+        call_kwargs = provider._client.messages.create.call_args.kwargs
+        assert "tools" in call_kwargs and len(call_kwargs["tools"]) == 1
+
+    def test_tool_schema_has_name_and_description(self, provider):
+        provider._client.messages.create.return_value = _sdk_response()
+        provider.complete([Message(role="user", content="x")], tools=[CALC_TOOL])
+        tool_schema = provider._client.messages.create.call_args.kwargs["tools"][0]
+        assert tool_schema["name"] == "calculator"
+        assert tool_schema["description"] == "basic arithmetic"
+
+    def test_tool_schema_input_properties_mapped(self, provider):
+        provider._client.messages.create.return_value = _sdk_response()
+        provider.complete([Message(role="user", content="x")], tools=[CALC_TOOL])
+        tool_schema = provider._client.messages.create.call_args.kwargs["tools"][0]
+        props = tool_schema["input_schema"]["properties"]
+        assert set(props.keys()) == {"op", "a", "b"}
+        assert props["op"] == {"type": "string", "description": "op name"}
+        assert props["a"]["type"] == "number"
+
+    def test_tool_schema_required_list_only_required_params(self, provider):
+        provider._client.messages.create.return_value = _sdk_response()
+        provider.complete([Message(role="user", content="x")], tools=[CALC_TOOL])
+        tool_schema = provider._client.messages.create.call_args.kwargs["tools"][0]
+        # `b` has required=False, so it's excluded
+        assert set(tool_schema["input_schema"]["required"]) == {"op", "a"}
+
+
+class TestCompleteToolUseResponse:
+    """Coverage for the `elif block.type == "tool_use":` branch."""
+
+    def test_tool_calls_populated(self, provider):
+        provider._client.messages.create.return_value = _tool_use_response()
+        result = provider.complete([Message(role="user", content="2+2")])
+        assert result.tool_calls is not None
+        assert len(result.tool_calls) == 1
+
+    def test_tool_call_fields_mapped(self, provider):
+        provider._client.messages.create.return_value = _tool_use_response(
+            tool_id="toolu_abc",
+            tool_name="calculator",
+            tool_input={"operation": "add", "a": 2, "b": 3},
+        )
+        result = provider.complete([Message(role="user", content="x")])
+        tc = result.tool_calls[0]
+        assert isinstance(tc, ToolCall)
+        assert tc.id == "toolu_abc"
+        assert tc.name == "calculator"
+        assert tc.arguments == {"operation": "add", "a": 2, "b": 3}
+
+    def test_stop_reason_is_tool_use(self, provider):
+        provider._client.messages.create.return_value = _tool_use_response()
+        result = provider.complete([Message(role="user", content="x")])
+        assert result.stop_reason == "tool_use"
+
+    def test_wants_tool_returns_true_for_tool_use_response(self, provider):
+        provider._client.messages.create.return_value = _tool_use_response()
+        result = provider.complete([Message(role="user", content="x")])
+        assert result.wants_tool() is True
+
+    def test_tool_calls_none_for_plain_text_response(self, provider):
+        provider._client.messages.create.return_value = _sdk_response("hi")
+        result = provider.complete([Message(role="user", content="x")])
+        assert result.tool_calls is None
+
+
+class TestCompleteMultipleTextBlocks:
+    """The provider must join every text block, not overwrite with the last."""
+
+    def _multi_text_response(self, parts):
+        resp = MagicMock()
+        resp.content = [MagicMock(type="text", text=p) for p in parts]
+        resp.usage.input_tokens = 1
+        resp.usage.output_tokens = 1
+        resp.model = "claude-test-model"
+        resp.stop_reason = "end_turn"
+        return resp
+
+    def test_two_text_blocks_concatenated(self, provider):
+        provider._client.messages.create.return_value = self._multi_text_response(
+            ["Hello, ", "world!"]
+        )
+        result = provider.complete([Message(role="user", content="x")])
+        assert result.text == "Hello, world!"
+
+    def test_many_text_blocks_concatenated_in_order(self, provider):
+        provider._client.messages.create.return_value = self._multi_text_response(
+            ["A", "B", "C", "D"]
+        )
+        result = provider.complete([Message(role="user", content="x")])
+        assert result.text == "ABCD"
+
+    def test_text_blocks_around_tool_use_all_preserved(self, provider):
+        """A text block before AND after a tool_use block — both kept."""
+        resp = MagicMock()
+        before = MagicMock(type="text", text="Let me check: ")
+        tool_block = MagicMock(type="tool_use")
+        tool_block.id = "toolu_x"
+        tool_block.name = "calculator"
+        tool_block.input = {"operation": "add", "a": 1, "b": 2}
+        after = MagicMock(type="text", text=" Done.")
+        resp.content = [before, tool_block, after]
+        resp.usage.input_tokens = 1
+        resp.usage.output_tokens = 1
+        resp.model = "claude-test-model"
+        resp.stop_reason = "tool_use"
+        provider._client.messages.create.return_value = resp
+
+        result = provider.complete([Message(role="user", content="x")])
+        assert result.text == "Let me check:  Done."
+        assert len(result.tool_calls) == 1
+
+
+class TestMessageContentTypes:
+    """Message.content accepts both str and list-of-blocks (Anthropic-style)."""
+
+    def test_string_content_forwarded_unchanged(self, provider):
+        provider._client.messages.create.return_value = _sdk_response()
+        provider.complete([Message(role="user", content="plain string")])
+        sent = provider._client.messages.create.call_args.kwargs["messages"]
+        assert sent[0]["content"] == "plain string"
+
+    def test_list_of_blocks_content_forwarded_unchanged(self, provider):
+        provider._client.messages.create.return_value = _sdk_response()
+        blocks = [
+            {"type": "tool_result", "tool_use_id": "toolu_1", "content": "42"},
+        ]
+        provider.complete([Message(role="user", content=blocks)])
+        sent = provider._client.messages.create.call_args.kwargs["messages"]
+        assert sent[0]["content"] == blocks
 
 
 # ---------------------------------------------------------------------------
