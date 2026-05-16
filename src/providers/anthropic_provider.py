@@ -1,5 +1,6 @@
 from typing import Iterator, Optional
 import anthropic
+from anthropic.types import ToolParam
 
 import config
 from src.providers.base import CompletionResponse, Message, ModelProvider, Tool, ToolCall
@@ -44,7 +45,7 @@ class AnthropicProvider(ModelProvider):
 
         # Translate our Tool dataclasses into Anthropic's expected format
         if tools:
-            kwargs["tools"] = [
+            anthropic_tools: list[ToolParam] = [
                 {
                     "name": t.name,
                     "description": t.description,
@@ -57,13 +58,13 @@ class AnthropicProvider(ModelProvider):
                             }
                             for p in t.parameters
                         },
-                        "required": [
-                            p.name for p in t.parameters if p.required
-                        ],
+                        "required": [p.name for p in t.parameters if p.required],
                     },
                 }
                 for t in tools
             ]
+
+            kwargs["tools"] = anthropic_tools
 
         response = self._client.messages.create(**kwargs)
 
