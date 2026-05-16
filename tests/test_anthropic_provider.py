@@ -234,6 +234,72 @@ class TestCompleteToolUseResponse:
         assert result.tool_calls is None
 
 
+class TestCompleteMultipleTextBlocks:
+    """The provider must join every text block, not overwrite with the last."""
+
+    def _multi_text_response(self, parts):
+        resp = MagicMock()
+        resp.content = [MagicMock(type="text", text=p) for p in parts]
+        resp.usage.input_tokens = 1
+        resp.usage.output_tokens = 1
+        resp.model = "claude-test-model"
+        resp.stop_reason = "end_turn"
+        return resp
+
+    def test_two_text_blocks_concatenated(self, provider):
+        provider._client.messages.create.return_value = self._multi_text_response(
+            ["Hello, ", "world!"]
+        )
+        result = provider.complete([Message(role="user", content="x")])
+        assert result.text == "Hello, world!"
+
+    def test_many_text_blocks_concatenated_in_order(self, provider):
+        provider._client.messages.create.return_value = self._multi_text_response(
+            ["A", "B", "C", "D"]
+        )
+        result = provider.complete([Message(role="user", content="x")])
+        assert result.text == "ABCD"
+
+    def test_text_blocks_around_tool_use_all_preserved(self, provider):
+        """A text block before AND after a tool_use block — both kept."""
+        resp = MagicMock()
+        before = MagicMock(type="text", text="Let me check: ")
+        tool_block = MagicMock(type="tool_use")
+        tool_block.id = "toolu_x"
+        tool_block.name = "calculator"
+        tool_block.input = {"operation": "add", "a": 1, "b": 2}
+        after = MagicMock(type="text", text=" Done.")
+        resp.content = [before, tool_block, after]
+        resp.usage.input_tokens = 1
+        resp.usage.output_tokens = 1
+        resp.model = "claude-test-model"
+        resp.stop_reason = "tool_use"
+        provider._client.messages.create.return_value = resp
+
+        result = provider.complete([Message(role="user", content="x")])
+        assert result.text == "Let me check:  Done."
+        assert len(result.tool_calls) == 1
+
+
+class TestMessageContentTypes:
+    """Message.content accepts both str and list-of-blocks (Anthropic-style)."""
+
+    def test_string_content_forwarded_unchanged(self, provider):
+        provider._client.messages.create.return_value = _sdk_response()
+        provider.complete([Message(role="user", content="plain string")])
+        sent = provider._client.messages.create.call_args.kwargs["messages"]
+        assert sent[0]["content"] == "plain string"
+
+    def test_list_of_blocks_content_forwarded_unchanged(self, provider):
+        provider._client.messages.create.return_value = _sdk_response()
+        blocks = [
+            {"type": "tool_result", "tool_use_id": "toolu_1", "content": "42"},
+        ]
+        provider.complete([Message(role="user", content=blocks)])
+        sent = provider._client.messages.create.call_args.kwargs["messages"]
+        assert sent[0]["content"] == blocks
+
+
 # ---------------------------------------------------------------------------
 # stream_complete()
 # ---------------------------------------------------------------------------

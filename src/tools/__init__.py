@@ -18,8 +18,19 @@ def execute_tool(tool_call: ToolCall) -> str:
     """
     Given a ToolCall from the model, find and run the right function.
     Returns the result as a string to send back to Claude.
+
+    Wraps the call so that bad arguments (missing/misnamed/extra/wrong-type)
+    surface as a structured error string instead of an uncaught exception —
+    Claude can read the message and self-correct on the next turn.
     """
     fn = TOOL_REGISTRY.get(tool_call.name)
     if not fn:
         return f"Error: no tool named '{tool_call.name}' is registered"
-    return fn(**tool_call.arguments)
+    try:
+        return fn(**tool_call.arguments)
+    except TypeError as e:
+        # Missing, extra, or misnamed arguments
+        return f"Error: invalid arguments for '{tool_call.name}': {e}"
+    except Exception as e:
+        # Any other runtime failure inside the tool
+        return f"Error: '{tool_call.name}' raised {type(e).__name__}: {e}"

@@ -69,10 +69,10 @@ class AnthropicProvider(ModelProvider):
 
         # Extract any tool calls from the response
         tool_calls = []
-        text = ""
+        text_parts = []
         for block in response.content:
             if block.type == "text":
-                text = block.text
+                text_parts.append(block.text)
             elif block.type == "tool_use":
                 tool_calls.append(ToolCall(
                     id=block.id,
@@ -81,7 +81,7 @@ class AnthropicProvider(ModelProvider):
                 ))
 
         return CompletionResponse(
-            text=text,
+            text="".join(text_parts),
             input_tokens=response.usage.input_tokens,
             output_tokens=response.usage.output_tokens,
             model=response.model,

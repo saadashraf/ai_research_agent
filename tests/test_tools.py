@@ -199,3 +199,32 @@ class TestExecuteTool:
         call = ToolCall(id="t3", name="nonexistent", arguments={})
         result = execute_tool(call)
         assert "no tool named" in result and "nonexistent" in result
+
+    def test_missing_argument_returns_structured_error(self):
+        # calculator needs operation/a/b — omit b
+        call = ToolCall(id="t4", name="calculator",
+                        arguments={"operation": "add", "a": 1})
+        result = execute_tool(call)
+        assert result.startswith("Error: invalid arguments for 'calculator'")
+
+    def test_misnamed_argument_returns_structured_error(self):
+        # web_search takes `query`, not `q`
+        call = ToolCall(id="t5", name="web_search", arguments={"q": "cats"})
+        result = execute_tool(call)
+        assert result.startswith("Error: invalid arguments for 'web_search'")
+
+    def test_extra_argument_returns_structured_error(self):
+        call = ToolCall(id="t6", name="web_search",
+                        arguments={"query": "cats", "limit": 10})
+        result = execute_tool(call)
+        assert result.startswith("Error: invalid arguments for 'web_search'")
+
+    def test_runtime_error_inside_tool_caught(self, monkeypatch):
+        # Force the underlying tool to raise something other than TypeError
+        def boom(**kwargs):
+            raise RuntimeError("simulated failure")
+        monkeypatch.setitem(TOOL_REGISTRY, "web_search", boom)
+        call = ToolCall(id="t7", name="web_search", arguments={"query": "x"})
+        result = execute_tool(call)
+        assert result.startswith("Error: 'web_search' raised RuntimeError")
+        assert "simulated failure" in result

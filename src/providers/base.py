@@ -1,13 +1,16 @@
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from typing import Iterator, Optional, Any
+from dataclasses import dataclass, field
+from typing import Any, Iterator, Optional, Union
+
+
+MessageContent = Union[str, list[dict[str, Any]]]
 
 
 @dataclass
 class Message:
     """A single turn in a conversation."""
-    role: str      # "user" or "assistant"
-    content: str
+    role: str                  # "user" or "assistant"
+    content: MessageContent    # str OR list of content blocks
 
 @dataclass
 class ToolParameter:
@@ -45,8 +48,8 @@ class CompletionResponse:
     input_tokens: int
     output_tokens: int
     model: str
-    stop_reason: str        # "end_turn" or "tool_use"
-    tool_calls: list[ToolCall] = None   # populated when stop_reason="tool_use"
+    stop_reason: str                                  # "end_turn" or "tool_use"
+    tool_calls: Optional[list[ToolCall]] = None      # populated when stop_reason="tool_use"
 
     def wants_tool(self) -> bool:
         """Convenience method — did the model ask for a tool?"""
@@ -71,10 +74,12 @@ class ModelProvider(ABC):
         system: Optional[str] = None,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
+        tools: Optional[list[Tool]] = None,
     ) -> CompletionResponse:
         """
         Send messages and return the model's reply.
-        This is the core method.
+        If `tools` is provided, the model may respond with tool calls
+        (CompletionResponse.tool_calls will be populated).
         """
         ...
 
