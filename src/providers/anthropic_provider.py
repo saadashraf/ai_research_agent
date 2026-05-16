@@ -2,7 +2,7 @@ from typing import Iterator, Optional
 import anthropic
 
 import config
-from src.providers.base import CompletionResponse, Message, ModelProvider
+from src.providers.base import CompletionResponse, Message, ModelProvider, Tool, ToolCall
 
 
 class AnthropicProvider(ModelProvider):
@@ -24,34 +24,69 @@ class AnthropicProvider(ModelProvider):
         system: Optional[str] = None,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
+        tools: Optional[list[Tool]] = None,
     ) -> CompletionResponse:
-        # Convert our generic Message dataclass into the
-        # Anthropic SDK's expected dict format
+
         anthropic_messages = [
             {"role": m.role, "content": m.content}
             for m in messages
         ]
 
-        # Build kwargs — only pass system if provided
         kwargs = dict(
             model=self._model,
-            max_tokens=max_tokens if max_tokens is not None else config.MAX_TOKENS,
-            temperature=temperature if temperature is not None else config.TEMPERATURE,
+            max_tokens=max_tokens or config.MAX_TOKENS,
+            temperature=temperature or config.TEMPERATURE,
             messages=anthropic_messages,
         )
+
         if system:
             kwargs["system"] = system
 
-        # The actual API call — all SDK-specific code is here
+        # Translate our Tool dataclasses into Anthropic's expected format
+        if tools:
+            kwargs["tools"] = [
+                {
+                    "name": t.name,
+                    "description": t.description,
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            p.name: {
+                                "type": p.type,
+                                "description": p.description,
+                            }
+                            for p in t.parameters
+                        },
+                        "required": [
+                            p.name for p in t.parameters if p.required
+                        ],
+                    },
+                }
+                for t in tools
+            ]
+
         response = self._client.messages.create(**kwargs)
 
-        # Translate the Anthropic response into our generic format
+        # Extract any tool calls from the response
+        tool_calls = []
+        text = ""
+        for block in response.content:
+            if block.type == "text":
+                text = block.text
+            elif block.type == "tool_use":
+                tool_calls.append(ToolCall(
+                    id=block.id,
+                    name=block.name,
+                    arguments=block.input,
+                ))
+
         return CompletionResponse(
-            reply_text=response.content[0].text,
+            text=text,
             input_tokens=response.usage.input_tokens,
             output_tokens=response.usage.output_tokens,
             model=response.model,
             stop_reason=response.stop_reason,
+            tool_calls=tool_calls if tool_calls else None,
         )
 
     def stream_complete(
