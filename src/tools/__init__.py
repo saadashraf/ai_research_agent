@@ -1,14 +1,16 @@
 from src.tools.calculator import CALCULATOR_TOOL, run_calculator
 from src.tools.file_reader import FILE_READER_TOOL, run_file_reader
+from src.tools.web_search import WEB_SEARCH_TOOL, run_web_search
 from src.providers.base import ToolCall
 
 # All available tools — add new ones here as the project grows
-ALL_TOOLS = [CALCULATOR_TOOL, FILE_READER_TOOL]
+ALL_TOOLS = [CALCULATOR_TOOL, FILE_READER_TOOL, WEB_SEARCH_TOOL]
 
 # Maps tool name → the Python function that runs it
 TOOL_REGISTRY = {
     "calculator": run_calculator,
     "read_file":  run_file_reader,
+    "web_search": run_web_search,
 }
 
 
