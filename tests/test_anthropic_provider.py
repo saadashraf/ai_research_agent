@@ -122,6 +122,119 @@ class TestComplete:
 
 
 # ---------------------------------------------------------------------------
+# complete() — tool support
+# ---------------------------------------------------------------------------
+
+from src.providers.base import Tool, ToolCall, ToolParameter
+
+
+def _tool_use_response(tool_id="toolu_1", tool_name="calculator",
+                      tool_input=None, model="claude-test-model"):
+    """Fake SDK response containing a tool_use block."""
+    resp = MagicMock()
+    block = MagicMock(type="tool_use")
+    block.id = tool_id
+    block.name = tool_name
+    block.input = tool_input or {"operation": "add", "a": 1, "b": 2}
+    resp.content = [block]
+    resp.usage.input_tokens = 5
+    resp.usage.output_tokens = 5
+    resp.model = model
+    resp.stop_reason = "tool_use"
+    return resp
+
+
+CALC_TOOL = Tool(
+    name="calculator",
+    description="basic arithmetic",
+    parameters=[
+        ToolParameter(name="op", type="string", description="op name"),
+        ToolParameter(name="a", type="number", description="first",
+                      required=True),
+        ToolParameter(name="b", type="number", description="second",
+                      required=False),
+    ],
+)
+
+
+class TestCompleteToolSchema:
+    """Coverage for the `if tools:` branch that builds the tools kwarg."""
+
+    def test_tools_kwarg_omitted_when_no_tools_passed(self, provider):
+        provider._client.messages.create.return_value = _sdk_response()
+        provider.complete([Message(role="user", content="x")])
+        call_kwargs = provider._client.messages.create.call_args.kwargs
+        assert "tools" not in call_kwargs
+
+    def test_tools_kwarg_included_when_tools_passed(self, provider):
+        provider._client.messages.create.return_value = _sdk_response()
+        provider.complete([Message(role="user", content="x")], tools=[CALC_TOOL])
+        call_kwargs = provider._client.messages.create.call_args.kwargs
+        assert "tools" in call_kwargs and len(call_kwargs["tools"]) == 1
+
+    def test_tool_schema_has_name_and_description(self, provider):
+        provider._client.messages.create.return_value = _sdk_response()
+        provider.complete([Message(role="user", content="x")], tools=[CALC_TOOL])
+        tool_schema = provider._client.messages.create.call_args.kwargs["tools"][0]
+        assert tool_schema["name"] == "calculator"
+        assert tool_schema["description"] == "basic arithmetic"
+
+    def test_tool_schema_input_properties_mapped(self, provider):
+        provider._client.messages.create.return_value = _sdk_response()
+        provider.complete([Message(role="user", content="x")], tools=[CALC_TOOL])
+        tool_schema = provider._client.messages.create.call_args.kwargs["tools"][0]
+        props = tool_schema["input_schema"]["properties"]
+        assert set(props.keys()) == {"op", "a", "b"}
+        assert props["op"] == {"type": "string", "description": "op name"}
+        assert props["a"]["type"] == "number"
+
+    def test_tool_schema_required_list_only_required_params(self, provider):
+        provider._client.messages.create.return_value = _sdk_response()
+        provider.complete([Message(role="user", content="x")], tools=[CALC_TOOL])
+        tool_schema = provider._client.messages.create.call_args.kwargs["tools"][0]
+        # `b` has required=False, so it's excluded
+        assert set(tool_schema["input_schema"]["required"]) == {"op", "a"}
+
+
+class TestCompleteToolUseResponse:
+    """Coverage for the `elif block.type == "tool_use":` branch."""
+
+    def test_tool_calls_populated(self, provider):
+        provider._client.messages.create.return_value = _tool_use_response()
+        result = provider.complete([Message(role="user", content="2+2")])
+        assert result.tool_calls is not None
+        assert len(result.tool_calls) == 1
+
+    def test_tool_call_fields_mapped(self, provider):
+        provider._client.messages.create.return_value = _tool_use_response(
+            tool_id="toolu_abc",
+            tool_name="calculator",
+            tool_input={"operation": "add", "a": 2, "b": 3},
+        )
+        result = provider.complete([Message(role="user", content="x")])
+        tc = result.tool_calls[0]
+        assert isinstance(tc, ToolCall)
+        assert tc.id == "toolu_abc"
+        assert tc.name == "calculator"
+        assert tc.arguments == {"operation": "add", "a": 2, "b": 3}
+
+    def test_stop_reason_is_tool_use(self, provider):
+        provider._client.messages.create.return_value = _tool_use_response()
+        result = provider.complete([Message(role="user", content="x")])
+        assert result.stop_reason == "tool_use"
+
+    def test_wants_tool_returns_true_for_tool_use_response(self, provider):
+        provider._client.messages.create.return_value = _tool_use_response()
+        result = provider.complete([Message(role="user", content="x")])
+        assert result.wants_tool() is True
+
+    def test_tool_calls_none_for_plain_text_response(self, provider):
+        provider._client.messages.create.return_value = _sdk_response("hi")
+        result = provider.complete([Message(role="user", content="x")])
+        assert result.tool_calls is None
+
+
+# ---------------------------------------------------------------------------
 # stream_complete()
 # ---------------------------------------------------------------------------
 

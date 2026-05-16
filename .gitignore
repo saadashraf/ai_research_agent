@@ -3,3 +3,9 @@ __pycache__/
 .env
 *.pyc
 .idea/
+
+# Test & coverage artifacts
+.coverage
+.coverage.*
+.pytest_cache/
+htmlcov/
