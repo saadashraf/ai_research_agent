@@ -24,7 +24,7 @@ def _sdk_response(text="Hello!", input_tokens=10, output_tokens=5,
                   model="claude-test-model", stop_reason="end_turn"):
     """Minimal fake SDK response object matching the fields we read."""
     resp = MagicMock()
-    resp.content = [MagicMock(text=text)]
+    resp.content = [MagicMock(type="text", text=text)]
     resp.usage.input_tokens = input_tokens
     resp.usage.output_tokens = output_tokens
     resp.model = model
@@ -50,10 +50,10 @@ class TestComplete:
         result = provider.complete([Message(role="user", content="Hello")])
         assert isinstance(result, CompletionResponse)
 
-    def test_reply_text_mapped_correctly(self, provider):
+    def test_text_mapped_correctly(self, provider):
         provider._client.messages.create.return_value = _sdk_response(text="Pong")
         result = provider.complete([Message(role="user", content="Ping")])
-        assert result.reply_text == "Pong"
+        assert result.text == "Pong"
 
     def test_token_counts_mapped(self, provider):
         provider._client.messages.create.return_value = _sdk_response(

@@ -34,8 +34,8 @@ class AnthropicProvider(ModelProvider):
 
         kwargs = dict(
             model=self._model,
-            max_tokens=max_tokens or config.MAX_TOKENS,
-            temperature=temperature or config.TEMPERATURE,
+            max_tokens=max_tokens if max_tokens is not None else config.MAX_TOKENS,
+            temperature=temperature if temperature is not None else config.TEMPERATURE,
             messages=anthropic_messages,
         )
 
