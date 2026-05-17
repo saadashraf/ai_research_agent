@@ -1,9 +1,11 @@
 from src.providers import get_provider
 from src.providers.base import AgentResult, Message
-from src.tools import ALL_TOOLS, execute_tool
+from src.tools import execute_tool
 
 
-def run_agent(user_query: str, system: str = None, max_turns: int = 5, verbose: bool = True) -> AgentResult:
+def run_agent(
+        user_query: str, system: str = None, tools: list = None, max_turns: int = 5, verbose: bool = True
+        ) -> AgentResult:
     """
     Runs the agent loop until one of three things happens:
       1. Model returns stop_reason="end_turn"  → clean finish
@@ -43,7 +45,7 @@ def run_agent(user_query: str, system: str = None, max_turns: int = 5, verbose: 
         response = provider.complete(
             messages=history,
             system=system,
-            tools=ALL_TOOLS,
+            tools=tools,
         )
 
         # Accumulate token usage across turns
