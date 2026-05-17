@@ -55,6 +55,21 @@ class CompletionResponse:
         """Convenience method — did the model ask for a tool?"""
         return self.stop_reason == "tool_use" and bool(self.tool_calls)
 
+@dataclass
+class AgentResult:
+    """
+    Everything produced by one complete agent run.
+    Returned by the harness — richer than a plain string.
+    """
+    answer: str
+    success: bool
+    turns: int
+    tool_calls_made: int
+    input_tokens: int
+    output_tokens: int
+    stop_reason: str
+    history: list                  
+
 
 class ModelProvider(ABC):
     """
