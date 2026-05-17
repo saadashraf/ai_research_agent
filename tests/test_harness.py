@@ -55,6 +55,7 @@ def _calc_call(id_="toolu_1", a=2, b=3):
 
 class TestAgentResult:
     def test_fields_round_trip(self):
+        history = [Message(role="user", content="hi")]
         result = AgentResult(
             answer="hi",
             success=True,
@@ -63,7 +64,7 @@ class TestAgentResult:
             input_tokens=10,
             output_tokens=20,
             stop_reason="end_turn",
-            history=[],
+            history=history,
         )
         assert result.answer == "hi"
         assert result.success is True
@@ -72,7 +73,14 @@ class TestAgentResult:
         assert result.input_tokens == 10
         assert result.output_tokens == 20
         assert result.stop_reason == "end_turn"
-        assert result.history == []
+        assert result.history == history
+
+    def test_history_is_list_of_messages(self):
+        """run_agent populates history with Message instances."""
+        result = run_agent("hi",
+                           provider=_fake_provider([_reply(text="hello")]))
+        assert isinstance(result.history, list)
+        assert all(isinstance(m, Message) for m in result.history)
 
 
 # ---------------------------------------------------------------------------
@@ -238,6 +246,100 @@ class TestRunAgentWithTools:
         with patch("src.agent.harness.execute_tool", return_value="ok"):
             result = run_agent("q", provider=_fake_provider(responses))
         assert result.tool_calls_made == 3
+
+
+# ---------------------------------------------------------------------------
+# run_agent — max_turns validation
+# ---------------------------------------------------------------------------
+
+class TestMaxTurnsValidation:
+    @pytest.mark.parametrize("bad_value", [0, -1, -100])
+    def test_rejects_non_positive_max_turns(self, bad_value):
+        with pytest.raises(ValueError, match="max_turns must be >= 1"):
+            run_agent("q",
+                      provider=_fake_provider([_reply()]),
+                      max_turns=bad_value)
+
+    def test_provider_not_called_when_max_turns_invalid(self):
+        provider = _fake_provider([_reply()])
+        with pytest.raises(ValueError):
+            run_agent("q", provider=provider, max_turns=0)
+        provider.complete.assert_not_called()
+
+    def test_accepts_max_turns_one(self):
+        """Boundary: max_turns=1 is valid and runs exactly one turn."""
+        result = run_agent("q",
+                           provider=_fake_provider([_reply(text="hi")]),
+                           max_turns=1)
+        assert result.turns == 1
+        assert result.success is True
+
+
+# ---------------------------------------------------------------------------
+# run_agent — provider.complete() error handling
+# ---------------------------------------------------------------------------
+
+class TestProviderError:
+    """When provider.complete() raises, the harness must return a failed
+    AgentResult instead of propagating the exception."""
+
+    def _failing_provider(self, exc):
+        provider = MagicMock()
+        provider.complete.side_effect = exc
+        return provider
+
+    def test_returns_agent_result_on_provider_error(self):
+        provider = self._failing_provider(RuntimeError("invalid API key"))
+        result = run_agent("q", provider=provider)
+        assert isinstance(result, AgentResult)
+
+    def test_marks_failure_on_provider_error(self):
+        provider = self._failing_provider(RuntimeError("invalid API key"))
+        result = run_agent("q", provider=provider)
+        assert result.success is False
+
+    def test_stop_reason_is_provider_error(self):
+        provider = self._failing_provider(RuntimeError("invalid API key"))
+        result = run_agent("q", provider=provider)
+        assert result.stop_reason == "provider_error"
+
+    def test_answer_contains_exception_message(self):
+        provider = self._failing_provider(RuntimeError("invalid API key"))
+        result = run_agent("q", provider=provider)
+        assert "invalid API key" in result.answer
+
+    def test_turns_reflects_failed_attempt(self):
+        """The turn that errored still counts as a turn attempted."""
+        provider = self._failing_provider(RuntimeError("boom"))
+        result = run_agent("q", provider=provider)
+        assert result.turns == 1
+
+    def test_history_preserved_on_provider_error(self):
+        """User message is kept in history even after an early failure."""
+        provider = self._failing_provider(RuntimeError("boom"))
+        result = run_agent("hello", provider=provider)
+        assert result.history[0] == Message(role="user", content="hello")
+
+    def test_error_on_second_turn_keeps_prior_history(self):
+        """If a tool turn succeeds and the next provider call fails,
+        we still get the assistant + tool_result entries in history."""
+        provider = MagicMock()
+        provider.complete.side_effect = [
+            _reply(text="thinking",
+                   stop_reason="tool_use",
+                   tool_calls=[_calc_call()]),
+            RuntimeError("rate limited"),
+        ]
+        with patch("src.agent.harness.execute_tool", return_value="5"):
+            result = run_agent("q", provider=provider)
+        assert result.success is False
+        assert result.stop_reason == "provider_error"
+        assert result.turns == 2
+        assert result.tool_calls_made == 1
+        # user, assistant(tool_use), user(tool_result)
+        assert len(result.history) == 3
+        assert result.history[1].role == "assistant"
+        assert result.history[2].role == "user"
 
 
 # ---------------------------------------------------------------------------

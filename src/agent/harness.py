@@ -80,6 +80,9 @@ def run_agent(
     Per-step progress is emitted at DEBUG level via the module logger.
     Enable with:  logging.basicConfig(level=logging.DEBUG)
     """
+    if max_turns <= 0:
+        raise ValueError(f"max_turns must be >= 1, got {max_turns}")
+
     if provider is None:
         provider = get_provider()
 
@@ -100,11 +103,24 @@ def run_agent(
         turns += 1
         logger.debug("[Turn %d] Calling model...", turns)
 
-        response = provider.complete(
-            messages=history,
-            system=system,
-            tools=tools,
-        )
+        try:
+            response = provider.complete(
+                messages=history,
+                system=system,
+                tools=tools,
+            )
+        except Exception as exc:
+            logger.exception("[Turn %d] provider.complete() failed", turns)
+            return AgentResult(
+                answer=f"Agent stopped: provider error: {exc}",
+                success=False,
+                turns=turns,
+                tool_calls_made=total_tool_calls,
+                input_tokens=total_input_tokens,
+                output_tokens=total_output_tokens,
+                stop_reason="provider_error",
+                history=history,
+            )
 
         total_input_tokens  += response.input_tokens
         total_output_tokens += response.output_tokens
