@@ -68,7 +68,7 @@ class AgentResult:
     input_tokens: int
     output_tokens: int
     stop_reason: str
-    history: list                  
+    history: list["Message"]
 
 
 class ModelProvider(ABC):
