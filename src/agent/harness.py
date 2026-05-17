@@ -3,7 +3,7 @@ from src.providers.base import AgentResult, Message
 from src.tools import ALL_TOOLS, execute_tool
 
 
-def run_agent(user_query: str, system: str, max_turns: int, verbose: bool = True) -> AgentResult:
+def run_agent(user_query: str, system: str = None, max_turns: int = 5, verbose: bool = True) -> AgentResult:
     """
     Runs the agent loop until one of three things happens:
       1. Model returns stop_reason="end_turn"  → clean finish
