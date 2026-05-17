@@ -2,20 +2,8 @@ from src.providers import get_provider
 from src.providers.base import AgentResult, Message
 from src.tools import ALL_TOOLS, execute_tool
 
-# Safety ceiling — the loop WILL stop here even if the model keeps asking for tools.
-# 10 is generous for a research agent; raise it if needed.
-MAX_TURNS = 10
 
-SYSTEM = """You are a helpful research assistant with access to tools.
-Use the calculator tool for any arithmetic — never compute in your head.
-Use read_file when asked about file contents.
-Use web_search when asked about current information from the web.
-After receiving a tool result, always summarise what you learned before
-deciding whether to call another tool or give a final answer.
-"""
-
-
-def run_agent(user_query: str, verbose: bool = True) -> AgentResult:
+def run_agent(user_query: str, system: str, max_turns: int, verbose: bool = True) -> AgentResult:
     """
     Runs the agent loop until one of three things happens:
       1. Model returns stop_reason="end_turn"  → clean finish
@@ -43,7 +31,7 @@ def run_agent(user_query: str, verbose: bool = True) -> AgentResult:
         print(f"{'='*60}")
 
     # ── THE LOOP ──────────────────────────────────────────────────
-    while turns < MAX_TURNS:
+    while turns < max_turns:
         turns += 1
 
         if verbose:
@@ -54,7 +42,7 @@ def run_agent(user_query: str, verbose: bool = True) -> AgentResult:
         # of its own — the history list is its memory.
         response = provider.complete(
             messages=history,
-            system=SYSTEM,
+            system=system,
             tools=ALL_TOOLS,
         )
 
@@ -85,18 +73,23 @@ def run_agent(user_query: str, verbose: bool = True) -> AgentResult:
         #   assistant: [tool_use block]
         #   user:      [tool_result block]
         # If you flip the order, the API rejects the request.
-        history.append(Message(
-            role="assistant",
-            content=[
-                {
-                    "type": "tool_use",
-                    "id": tc.id,
-                    "name": tc.name,
-                    "input": tc.arguments,
-                }
-                for tc in response.tool_calls   # may be multiple tools in one turn
-            ]
-        ))
+
+        assistant_content = []
+
+        if response.text:  # only add if Claude actually said something
+            if verbose:
+                print(f"[Thinking] {response.text}")
+            assistant_content.append({"type": "text", "text": response.text})
+
+        for tc in response.tool_calls:
+            assistant_content.append({
+                "type": "tool_use",
+                "id": tc.id,
+                "name": tc.name,
+                "input": tc.arguments,
+            })
+
+        history.append(Message(role="assistant", content=assistant_content))
 
         # Now run each tool and collect results
         tool_results = []
