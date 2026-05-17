@@ -1,18 +1,24 @@
+import logging
+
 from src.providers import get_provider
 from src.providers.base import AgentResult, Message
 from src.tools import execute_tool
 
 
+logger = logging.getLogger(__name__)
+
+
 def run_agent(
-        user_query: str, system: str = None, tools: list = None, max_turns: int = 5, verbose: bool = True
+        user_query: str, system: str = None, tools: list = None, max_turns: int = 5
         ) -> AgentResult:
     """
     Runs the agent loop until one of three things happens:
       1. Model returns stop_reason="end_turn"  → clean finish
-      2. Turn count hits MAX_TURNS             → forced stop, safety net
+      2. Turn count hits max_turns             → forced stop, safety net
       3. An unexpected exception               → captured, returned in result
 
-    verbose=True prints each step
+    Per-step progress is emitted at DEBUG level via the module logger.
+    Enable with:  logging.basicConfig(level=logging.DEBUG)
     """
     provider = get_provider()
 
@@ -26,18 +32,16 @@ def run_agent(
     total_tool_calls = 0
     turns = 0
 
-    if verbose:
-        print(f"\n{'='*60}")
-        print(f"[Agent] Starting run")
-        print(f"[User]  {user_query}")
-        print(f"{'='*60}")
+    logger.debug("=" * 60)
+    logger.debug("[Agent] Starting run")
+    logger.debug("[User]  %s", user_query)
+    logger.debug("=" * 60)
 
     # ── THE LOOP ──────────────────────────────────────────────────
     while turns < max_turns:
         turns += 1
 
-        if verbose:
-            print(f"\n[Turn {turns}] Calling model...")
+        logger.debug("[Turn %d] Calling model...", turns)
 
         # ── MODEL CALL ────────────────────────────────────────────
         # We pass the FULL history every time. The model has no memory
@@ -54,9 +58,9 @@ def run_agent(
 
         # ── STOP: model is done ───────────────────────────────────
         if not response.wants_tool():
-            if verbose:
-                print(f"[Turn {turns}] Model finished. stop_reason={response.stop_reason}")
-                print(f"[Answer] {response.text}")
+            logger.debug("[Turn %d] Model finished. stop_reason=%s",
+                         turns, response.stop_reason)
+            logger.debug("[Answer] %s", response.text)
 
             return AgentResult(
                 answer=response.text,
@@ -79,8 +83,7 @@ def run_agent(
         assistant_content = []
 
         if response.text:  # only add if Claude actually said something
-            if verbose:
-                print(f"[Thinking] {response.text}")
+            logger.debug("[Thinking] %s", response.text)
             assistant_content.append({"type": "text", "text": response.text})
 
         for tc in response.tool_calls:
@@ -98,8 +101,7 @@ def run_agent(
         for tool_call in response.tool_calls:
             total_tool_calls += 1
 
-            if verbose:
-                print(f"[Tool]  {tool_call.name}({tool_call.arguments})")
+            logger.debug("[Tool]  %s(%s)", tool_call.name, tool_call.arguments)
 
             # Wrap in try/except so one broken tool doesn't abort the run.
             # We return the error string as the result — the model will
@@ -109,8 +111,7 @@ def run_agent(
             except Exception as e:
                 result = f"Tool error: {e}"
 
-            if verbose:
-                print(f"[Result] {result}")
+            logger.debug("[Result] %s", result)
 
             tool_results.append({
                 "type": "tool_result",
@@ -123,10 +124,9 @@ def run_agent(
         # Loop continues → model sees the results next turn
 
     # ── SAFETY NET: too many turns ────────────────────────────────
-    # We exhausted MAX_TURNS without a clean end_turn.
+    # We exhausted max_turns without a clean end_turn.
     # This is abnormal — log it clearly.
-    if verbose:
-        print(f"\n[Agent] Hit MAX_TURNS ({MAX_TURNS}). Stopping.")
+    logger.debug("[Agent] Hit MAX_TURNS (%d). Stopping.", max_turns)
 
     return AgentResult(
         answer="Agent stopped: exceeded maximum turn limit without a final answer.",
