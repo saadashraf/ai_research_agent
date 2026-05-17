@@ -32,10 +32,8 @@ def run_agent(
     total_tool_calls = 0
     turns = 0
 
-    logger.debug("=" * 60)
     logger.debug("[Agent] Starting run")
     logger.debug("[User]  %s", user_query)
-    logger.debug("=" * 60)
 
     # ── THE LOOP ──────────────────────────────────────────────────
     while turns < max_turns:
