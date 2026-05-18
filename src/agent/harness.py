@@ -1,5 +1,6 @@
 import logging
-from typing import Optional
+import inspect
+from typing import Optional, Callable
 
 from src.providers import get_provider
 from src.providers.base import (
@@ -10,18 +11,16 @@ from src.providers.base import (
     Tool,
     ToolCall,
 )
-from src.tools import execute_tool
-
 
 logger = logging.getLogger(__name__)
 
 
 def _build_assistant_message(response: CompletionResponse) -> Message:
     """
-    Convert a CompletionResponse with tool_use blocks into the
-    assistant-turn Message that gets appended to history.
+    Convert a CompletionResponse into the assistant-turn Message
+    that gets appended to history.
 
-    Order matters: any text block must precede tool_use blocks
+    Order matters: text block must precede tool_use blocks
     (Anthropic API requirement).
     """
     blocks: list[dict] = []
@@ -42,43 +41,47 @@ def _build_assistant_message(response: CompletionResponse) -> Message:
     return Message(role="assistant", content=blocks)
 
 
-def _run_tool_call(tool_call: ToolCall) -> dict:
+async def _run_tool_call(tool_call: ToolCall, executor: Callable) -> dict:
     """
-    Execute one tool call and return the tool_result block ready to
-    drop into a user-turn message.
-
-    Tool exceptions are already converted to error strings by
-    `execute_tool`, so no try/except is needed here.
+    Execute one tool call using the provided executor.
+    Handles both sync and async executors transparently —
+    sync execute_tool and async MCP client both work without
+    the caller needing to care which one it is.
     """
     logger.debug("[Tool]  %s(%s)", tool_call.name, tool_call.arguments)
-    result = execute_tool(tool_call)
+
+    result = executor(tool_call)
+
+    if inspect.isawaitable(result):
+        result = await result
+
     logger.debug("[Result] %s", result)
 
     return {
         "type": "tool_result",
-        "tool_use_id": tool_call.id,   # must match the tool_use id above
+        "tool_use_id": tool_call.id,
         "content": result,
     }
 
 
-def run_agent(
+async def run_agent(
         user_query: str,
         system: Optional[str] = None,
         tools: Optional[list[Tool]] = None,
+        executor: Optional[Callable] = None,
         max_turns: int = 5,
         provider: Optional[ModelProvider] = None,
         ) -> AgentResult:
     """
-    Runs the agent loop until one of three things happens:
+    Async agent loop. Runs until one of three things happens:
       1. Model returns stop_reason="end_turn"  → clean finish
-      2. Turn count hits max_turns             → forced stop, safety net
-      3. An unexpected exception               → captured, returned in result
+      2. Turn count hits max_turns             → forced stop
+      3. provider.complete() raises            → captured in result
 
-    A `provider` may be injected (handy for tests and for reusing a
-    single client across multiple runs); otherwise one is built from config.
-
-    Per-step progress is emitted at DEBUG level via the module logger.
-    Enable with:  logging.basicConfig(level=logging.DEBUG)
+    executor: callable that runs a tool, sync or async.
+              Only required if the model actually calls a tool.
+              Pass execute_tool for local tools or an async MCP
+              executor for remote tools.
     """
     if max_turns <= 0:
         raise ValueError(f"max_turns must be >= 1, got {max_turns}")
@@ -86,8 +89,6 @@ def run_agent(
     if provider is None:
         provider = get_provider()
 
-    # Seed history with the user's message.
-    # Every subsequent append grows this list — the agent's memory.
     history: list[Message] = [Message(role="user", content=user_query)]
 
     total_input_tokens = 0
@@ -98,7 +99,6 @@ def run_agent(
     logger.debug("[Agent] Starting run")
     logger.debug("[User]  %s", user_query)
 
-    # ── THE LOOP ──────────────────────────────────────────────────
     while turns < max_turns:
         turns += 1
         logger.debug("[Turn %d] Calling model...", turns)
@@ -125,7 +125,8 @@ def run_agent(
         total_input_tokens  += response.input_tokens
         total_output_tokens += response.output_tokens
 
-        # ── STOP: model is done ───────────────────────────────────
+        logger.info("[Turn %d] Model returned response: %s", turns, response.text)
+
         if not response.wants_tool():
             logger.debug("[Turn %d] Model finished. stop_reason=%s",
                          turns, response.stop_reason)
@@ -142,25 +143,24 @@ def run_agent(
                 history=history,
             )
 
-        # ── CONTINUE: model wants tools ───────────────────────────
-        # The assistant message (with tool_use blocks) must go into
-        # history BEFORE the tool results. If you flip the order,
-        # the Anthropic API rejects the request.
+        # Model wants tools — now executor matters
+        if executor is None:
+            raise ValueError(
+                "Model requested a tool but no executor was provided — "
+                "pass execute_tool for local tools or an MCP executor"
+            )
+
         history.append(_build_assistant_message(response))
 
-        # Run each tool the model asked for, collecting one result block per call.
         tool_results = []
         for tool_call in response.tool_calls:
-            result_block = _run_tool_call(tool_call)
+            result_block = await _run_tool_call(tool_call, executor)
             tool_results.append(result_block)
             total_tool_calls += 1
 
-        # All tool results go back as a single user message.
         history.append(Message(role="user", content=tool_results))
-        # Loop continues → model sees the results next turn
 
-    # ── SAFETY NET: too many turns ────────────────────────────────
-    logger.debug("[Agent] Hit MAX_TURNS (%d). Stopping.", max_turns)
+    logger.debug("[Agent] Hit max_turns (%d). Stopping.", max_turns)
 
     return AgentResult(
         answer="Agent stopped: exceeded maximum turn limit without a final answer.",
