@@ -1,9 +1,7 @@
-import asyncio
 import logging
 import sys
 import os
 from pathlib import Path
-from contextlib import asynccontextmanager
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
@@ -73,7 +71,7 @@ class MCPClient:
     async def list_tools(self) -> list[Tool]:
         """
         Fetch available tools from the server.
-        Translates MCP tool definitions back into your Tool dataclasses
+        Translates MCP tool definitions back into Tool dataclasses
         so the harness never sees MCP types.
         Result is cached — server doesn't change tools mid-session.
         """
