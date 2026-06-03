@@ -5,7 +5,7 @@ from pathlib import Path
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from src.providers.base import Tool, ToolParameter
+from src.providers.base import Tool, ToolParameter, ToolCall
 
 logger = logging.getLogger(__name__)
 
@@ -104,15 +104,18 @@ class MCPClient:
         self._tools = tools
         return tools
 
-    async def call_tool(self, name: str, arguments: dict) -> str:
+    async def call_tool(self, tool_call: ToolCall) -> str:
         """
         Call a tool on the server and return the result as a string.
         Same return type as execute_tool() — harness needs no changes.
         Distinguishes tool errors from transport errors explicitly.
         """
-        logger.debug("[MCPClient] call_tool: %s(%s)", name, arguments)
+        logger.debug("[MCPClient] call_tool: %s(%s)", tool_call)
 
-        response = await self._session.call_tool(name, arguments)
+        response = await self._session.call_tool(
+            tool_call.name,
+            tool_call.arguments
+        )
 
         # Tool error — the tool ran but reported failure
         # Pass it back as a string so the model can reason about it
