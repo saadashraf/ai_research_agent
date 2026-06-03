@@ -8,30 +8,15 @@ from src.providers.base import AgentResult, ModelProvider
 logger = logging.getLogger(__name__)
 
 
-def _make_executor(client: MCPClient):
-    """
-    Returns an async callable that routes tool calls through MCP.
-    Kept private — callers never interact with executors directly.
-    """
-    async def executor(tool_call):
-        return await client.call_tool(tool_call.name, tool_call.arguments)
-    return executor
-
-
 class Agent:
     """
     A self-contained agent with a fixed identity and toolset.
-
-    The caller provides a goal (system prompt) and queries.
-    Everything else — MCP lifecycle, tool discovery, executor
-    wiring — is handled internally.
 
     Usage:
         async with Agent(system=SYSTEM) as agent:
             result = await agent.run("What is 1234 * 5678?")
             print(result.answer)
 
-    This is the unit the orchestrator talks to in Phase 5.
     One agent = one goal = one set of tools = one system prompt.
     """
 
@@ -61,7 +46,7 @@ class Agent:
         await self._client.__aenter__()
 
         self._tools = await self._client.list_tools()
-        self._executor = _make_executor(self._client)
+        self._executor = self._client.call_tool
 
         logger.debug(
             "[Agent] Ready. Tools: %s", [t.name for t in self._tools]
