@@ -1,4 +1,5 @@
 import logging
+from contextlib import AsyncExitStack
 from typing import Optional
 
 from src.agent.harness import run_agent
@@ -33,6 +34,7 @@ class Agent:
         self._provider = provider
 
         # Populated during __aenter__ — not available until context is entered
+        self._stack: Optional[AsyncExitStack] = None
         self._client: Optional[MCPClient] = None
         self._tools = None
         self._executor = None
@@ -41,22 +43,40 @@ class Agent:
         """
         Starts the MCP server subprocess and runs the handshake.
         Discovers available tools so they're ready for every run() call.
+
+        Each resource is entered through an AsyncExitStack, which records
+        it for reverse-order cleanup the moment it enters successfully.
+        If any later step fails, aclose() unwinds exactly what was entered
+        so far — no orphaned server subprocess. Ownership of the stack is
+        only handed to the instance via pop_all() once setup fully
+        succeeds; until then a failure cleans up locally and re-raises.
         """
-        self._client = MCPClient(self._server)
-        await self._client.__aenter__()
+        stack = AsyncExitStack()
+        try:
+            self._client = await stack.enter_async_context(
+                MCPClient(self._server)
+            )
 
-        self._tools = await self._client.list_tools()
-        self._executor = self._client.call_tool
+            self._tools = await self._client.list_tools()
+            self._executor = self._client.call_tool
 
-        logger.debug(
-            "[Agent] Ready. Tools: %s", [t.name for t in self._tools]
-        )
-        return self
+            logger.debug(
+                "[Agent] Ready. Tools: %s", [t.name for t in self._tools]
+            )
+
+            # Setup succeeded — transfer cleanup duty to the instance so
+            # __aexit__ owns it. pop_all() empties the local stack, so the
+            # except below becomes a no-op if we get here.
+            self._stack = stack.pop_all()
+            return self
+        except BaseException:
+            await stack.aclose()
+            raise
 
     async def __aexit__(self, *args):
         """Shuts down the MCP server subprocess cleanly."""
-        if self._client:
-            await self._client.__aexit__(*args)
+        if self._stack:
+            await self._stack.__aexit__(*args)
 
     async def run(self, query: str) -> AgentResult:
         """
