@@ -77,6 +77,7 @@ class Agent:
         """Shuts down the MCP server subprocess cleanly."""
         if self._stack:
             await self._stack.__aexit__(*args)
+        self._client = None
 
     async def run(self, query: str) -> AgentResult:
         """
