@@ -110,7 +110,7 @@ class MCPClient:
         Same return type as execute_tool() — harness needs no changes.
         Distinguishes tool errors from transport errors explicitly.
         """
-        logger.debug("[MCPClient] call_tool: %s(%s)", tool_call)
+        logger.debug("[MCPClient] call_tool: %s(%s)", tool_call.name, tool_call.arguments)
 
         response = await self._session.call_tool(
             tool_call.name,
